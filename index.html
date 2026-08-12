@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>YouTube Audio Summarizer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #181b22;
+    --card-2: #1f232c;
+    --border: #2a2f3a;
+    --text: #e7ebf0;
+    --muted: #9aa4b2;
+    --accent: #ff4d4d;
+    --accent-2: #6c8cff;
+    --ok: #47c974;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 50% -10%, #1b2030 0%, var(--bg) 60%);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 48px 20px 80px; }
+  header { text-align: center; margin-bottom: 32px; }
+  .logo {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-size: 26px; font-weight: 700; letter-spacing: -0.02em;
+  }
+  .logo .play {
+    width: 34px; height: 24px; background: var(--accent); border-radius: 7px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .logo .play::after {
+    content: ""; border-left: 10px solid #fff;
+    border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+    margin-left: 2px;
+  }
+  .sub { color: var(--muted); margin-top: 8px; font-size: 14px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 22px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  input[type="text"], select {
+    background: var(--card-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; padding: 13px 14px; font-size: 15px; outline: none;
+    transition: border-color .15s;
+  }
+  input[type="text"] { flex: 1 1 320px; }
+  input[type="text"]:focus, select:focus { border-color: var(--accent-2); }
+  select { flex: 0 0 auto; min-width: 150px; }
+  button {
+    background: var(--accent); color: #fff; border: none; border-radius: 10px;
+    padding: 13px 22px; font-size: 15px; font-weight: 600; cursor: pointer;
+    transition: transform .06s, opacity .15s;
+  }
+  button:hover { opacity: .92; }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 12px; }
+
+  /* progress */
+  #progress { margin-top: 22px; display: none; }
+  .steps { display: flex; gap: 8px; margin-bottom: 14px; }
+  .step {
+    flex: 1; text-align: center; font-size: 12px; color: var(--muted);
+    padding: 8px 6px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--card-2);
+  }
+  .step.active { color: #fff; border-color: var(--accent-2); background: #232a3d; }
+  .step.done { color: var(--ok); border-color: #244a34; }
+  .statusline {
+    display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px;
+  }
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid var(--border);
+    border-top-color: var(--accent-2); border-radius: 50%;
+    animation: spin .8s linear infinite; flex: 0 0 auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* result */
+  #result { margin-top: 22px; display: none; }
+  .result-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .vid-title { font-size: 17px; font-weight: 650; }
+  .actions { display: flex; gap: 8px; }
+  .actions button { padding: 9px 14px; font-size: 13px; }
+  .btn-ghost { background: var(--card-2); border: 1px solid var(--border); color: var(--text); }
+  .summary {
+    background: var(--card-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; line-height: 1.6; font-size: 15px; white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .chapters { margin-top: 20px; display: none; }
+  .chapters h3 { font-size: 14px; margin: 0 0 12px; color: var(--text); }
+  .chapter {
+    display: flex; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border);
+  }
+  .chapter:first-of-type { border-top: none; }
+  .ch-time {
+    flex: 0 0 auto; font-variant-numeric: tabular-nums; font-size: 12.5px;
+    color: var(--accent-2); font-weight: 600; padding-top: 1px; min-width: 84px;
+  }
+  .ch-body .ch-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+  .ch-body .ch-sum { font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+  details { margin-top: 14px; }
+  summary.sm { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .transcript {
+    margin-top: 10px; max-height: 240px; overflow: auto; font-size: 13px;
+    color: var(--muted); line-height: 1.55; background: var(--card-2);
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+  }
+  .error {
+    margin-top: 18px; display: none; background: #2a1a1c; border: 1px solid #5a2b2f;
+    color: #ffb4b4; border-radius: 10px; padding: 14px 16px; font-size: 14px;
+  }
+  footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 28px; }
+  a { color: var(--accent-2); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo"><span class="play"></span> Audio Summarizer</div>
+      <div class="sub">Paste a YouTube link. It transcribes the audio locally with Whisper and summarizes it with your Ollama model. Nothing leaves your machine.</div>
+    </header>
+
+    <div class="card">
+      <div class="row">
+        <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" />
+        <select id="model" title="Local Ollama model"></select>
+        <button id="go">Summarize</button>
+      </div>
+      <div class="hint" id="hint">Loading local models…</div>
+
+      <div id="progress">
+        <div class="steps">
+          <div class="step" data-step="download">1 · Download</div>
+          <div class="step" data-step="transcribe">2 · Transcribe</div>
+          <div class="step" data-step="summarize">3 · Summarize</div>
+        </div>
+        <div class="statusline"><span class="spinner"></span><span id="statusmsg">Starting…</span></div>
+      </div>
+
+      <div class="error" id="error"></div>
+
+      <div id="result">
+        <div class="result-head">
+          <div class="vid-title" id="vidtitle">Summary</div>
+          <div class="actions">
+            <button class="btn-ghost" id="copy">Copy</button>
+            <button class="btn-ghost" id="txt">Save .txt</button>
+            <button id="pdf">Save PDF</button>
+          </div>
+        </div>
+        <div class="summary" id="summary"></div>
+        <div class="chapters" id="chapters">
+          <h3>Chapters</h3>
+          <div id="chapterlist"></div>
+        </div>
+        <details>
+          <summary class="sm">Show full transcript</summary>
+          <div class="transcript" id="transcript"></div>
+        </details>
+      </div>
+    </div>
+
+    <footer>Runs fully offline · Whisper + Ollama · <span id="pipeinfo"></span></footer>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let state = { title: "Summary", summary: "", transcript: "", chapters: [] };
+
+async function loadModels() {
+  try {
+    const r = await fetch("/models");
+    const j = await r.json();
+    const sel = $("model");
+    sel.innerHTML = "";
+    if (j.models && j.models.length) {
+      j.models.forEach(m => {
+        const o = document.createElement("option");
+        o.value = m; o.textContent = m; sel.appendChild(o);
+      });
+      $("hint").textContent = "Ready. Choose a model and paste a link.";
+    } else {
+      const o = document.createElement("option");
+      o.value = "llama3.2"; o.textContent = "llama3.2 (not detected)";
+      sel.appendChild(o);
+      $("hint").innerHTML = "No Ollama models detected. Start Ollama and run <code>ollama pull llama3.2</code>, then reload.";
+    }
+  } catch {
+    $("hint").textContent = "Could not reach the server /models endpoint.";
+  }
+}
+
+function setStep(stage) {
+  const order = ["download", "transcribe", "summarize"];
+  // "chapters" runs after the overall summary — keep all three marked done.
+  const idx = stage === "chapters" ? order.length : order.indexOf(stage);
+  document.querySelectorAll(".step").forEach(el => {
+    const s = el.dataset.step;
+    const i = order.indexOf(s);
+    el.classList.remove("active", "done");
+    if (i < idx) el.classList.add("done");
+    else if (i === idx) el.classList.add("active");
+  });
+}
+
+function reset() {
+  $("error").style.display = "none";
+  $("result").style.display = "none";
+  $("summary").textContent = "";
+  $("transcript").textContent = "";
+  $("chapters").style.display = "none";
+  $("chapterlist").innerHTML = "";
+  state = { title: "Summary", summary: "", transcript: "", chapters: [] };
+}
+
+function run() {
+  const url = $("url").value.trim();
+  const model = $("model").value;
+  if (!url) { showError("Please paste a YouTube URL first."); return; }
+  reset();
+  $("go").disabled = true;
+  $("progress").style.display = "block";
+  $("statusmsg").textContent = "Starting…";
+  setStep("download");
+
+  const es = new EventSource(`/summarize?url=${encodeURIComponent(url)}&model=${encodeURIComponent(model)}`);
+
+  es.addEventListener("status", (e) => {
+    const d = JSON.parse(e.data);
+    setStep(d.stage);
+    $("statusmsg").textContent = d.message;
+  });
+  es.addEventListener("title", (e) => {
+    state.title = JSON.parse(e.data).title;
+    $("vidtitle").textContent = state.title;
+  });
+  es.addEventListener("transcript", (e) => {
+    state.transcript = JSON.parse(e.data).text;
+    $("transcript").textContent = state.transcript;
+  });
+  es.addEventListener("summary_chunk", (e) => {
+    if ($("result").style.display !== "block") $("result").style.display = "block";
+    state.summary += JSON.parse(e.data).text;
+    $("summary").textContent = state.summary;
+  });
+  es.addEventListener("chapters_start", () => {
+    $("chapters").style.display = "block";
+  });
+  es.addEventListener("chapter", (e) => {
+    const c = JSON.parse(e.data);
+    state.chapters.push(c);
+    const row = document.createElement("div");
+    row.className = "chapter";
+    row.innerHTML =
+      `<div class="ch-time">${c.start}–${c.end}</div>` +
+      `<div class="ch-body"><div class="ch-title"></div><div class="ch-sum"></div></div>`;
+    row.querySelector(".ch-title").textContent = c.title;
+    row.querySelector(".ch-sum").textContent = c.summary;
+    $("chapterlist").appendChild(row);
+  });
+  es.addEventListener("done", () => {
+    $("progress").style.display = "none";
+    $("go").disabled = false;
+    es.close();
+  });
+  es.addEventListener("error", (e) => {
+    let msg = "Connection lost or the server stopped.";
+    try { if (e.data) msg = JSON.parse(e.data).message; } catch {}
+    showError(msg);
+    $("progress").style.display = "none";
+    $("go").disabled = false;
+    es.close();
+  });
+}
+
+function showError(msg) {
+  const el = $("error");
+  el.textContent = msg;
+  el.style.display = "block";
+}
+
+function fileName(ext) {
+  const safe = state.title.replace(/[^\w\- ]+/g, "").trim().slice(0, 60) || "summary";
+  return `${safe}.${ext}`;
+}
+
+function chaptersText() {
+  if (!state.chapters.length) return "";
+  const lines = state.chapters.map(c => `[${c.start}–${c.end}] ${c.title}\n    ${c.summary}`);
+  return `\n\nCHAPTERS\n\n${lines.join("\n\n")}`;
+}
+
+$("txt").onclick = () => {
+  const body = `${state.title}\n${"=".repeat(state.title.length)}\n\nSUMMARY\n\n${state.summary}${chaptersText()}\n\n\nFULL TRANSCRIPT\n\n${state.transcript}\n`;
+  const blob = new Blob([body], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = fileName("txt"); a.click();
+};
+
+$("copy").onclick = async () => {
+  await navigator.clipboard.writeText(`${state.title}\n\n${state.summary}`);
+  $("copy").textContent = "Copied!";
+  setTimeout(() => ($("copy").textContent = "Copy"), 1500);
+};
+
+$("pdf").onclick = () => {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const margin = 48, width = 595 - margin * 2;
+  let y = margin;
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(16);
+  doc.splitTextToSize(state.title, width).forEach(line => {
+    doc.text(line, margin, y); y += 20;
+  });
+  y += 6;
+  doc.setDrawColor(220); doc.line(margin, y, 595 - margin, y); y += 22;
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+  doc.text("Summary", margin, y); y += 18;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(11);
+  doc.splitTextToSize(state.summary, width).forEach(line => {
+    if (y > 800) { doc.addPage(); y = margin; }
+    doc.text(line, margin, y); y += 15;
+  });
+
+  if (state.chapters.length) {
+    y += 16;
+    if (y > 780) { doc.addPage(); y = margin; }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+    doc.text("Chapters", margin, y); y += 18;
+    state.chapters.forEach(c => {
+      if (y > 790) { doc.addPage(); y = margin; }
+      doc.setFont("helvetica", "bold"); doc.setFontSize(10.5);
+      doc.text(`${c.start}-${c.end}  ${c.title}`, margin, y); y += 14;
+      doc.setFont("helvetica", "normal"); doc.setFontSize(10.5);
+      doc.splitTextToSize(c.summary, width - 12).forEach(line => {
+        if (y > 800) { doc.addPage(); y = margin; }
+        doc.text(line, margin + 12, y); y += 13;
+      });
+      y += 6;
+    });
+  }
+
+  doc.save(fileName("pdf"));
+};
+
+$("go").onclick = run;
+$("url").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+$("pipeinfo").textContent = "";
+loadModels();
+</script>
+</body>
+</html>

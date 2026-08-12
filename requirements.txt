@@ -1,0 +1,4 @@
+flask>=3.0
+requests>=2.31
+yt-dlp>=2024.1.0
+faster-whisper>=1.0.0
