@@ -136,29 +136,35 @@ def make_chapters(segments: list[dict], window: int) -> list[dict]:
     return chapters
 
 
-SUMMARY_PROMPT = """You are a precise assistant. Summarize the following transcript of a \
-YouTube video's audio. Produce:
+SUMMARY_PROMPT = """You are a precise assistant. Summarize the content below. Produce:
 
 1. A one-sentence TL;DR.
 2. 4-8 key points as a bulleted list.
 3. A short "Takeaways" paragraph.
 
-Be faithful to the transcript. Do not invent facts.
+Write about the subject matter itself, never about the source. Start straight at item 1 \
+with no preamble: no "This is a transcript", "This video", "In this video", "The speaker", \
+"Here is a summary". Do not mention a transcript, video, audio or narrator anywhere. Refer \
+to ideas and claims directly, not to who said them.
 
-TRANSCRIPT:
+Be faithful to the content. Do not invent facts.
+
+CONTENT:
 \"\"\"
 {transcript}
 \"\"\"
 """
 
 
-CHAPTER_PROMPT = """Below is one section of a video transcript. Reply with exactly this format:
+CHAPTER_PROMPT = """Below is one section of a longer piece of content. Reply with exactly \
+this format:
 TITLE: <a short 3-7 word title for this section>
-SUMMARY: <1-2 sentences describing what is covered>
+SUMMARY: <1-2 sentences on the subject matter itself>
 
-Do not add anything else. Be faithful to the transcript.
+Do not add anything else. Do not mention a transcript, video, audio, section or speaker in \
+either line. Be faithful to the content.
 
-SECTION TRANSCRIPT:
+SECTION:
 \"\"\"
 {transcript}
 \"\"\"
@@ -176,6 +182,45 @@ def summarize_once(prompt: str, model: str) -> str:
     return resp.json().get("response", "").strip()
 
 
+# Models sometimes ignore the "no preamble" instruction, so strip it after the fact.
+META_RE = re.compile(
+    r"\btranscripts?\b"
+    r"|^(sure|certainly|okay|ok|of course|absolutely)\b"
+    r"|^here(?:'s| is)\b"
+    r"|^below is\b",
+    re.I,
+)
+SECTION_LEAD_RE = re.compile(
+    r"^in this (section|part|segment|video|chapter|clip)[,:]?\s*", re.I
+)
+
+
+def _is_meta(sentence: str) -> bool:
+    """True if a sentence frames the source rather than covering the content."""
+    s = sentence.strip()
+    if not s or s[0] in "-*#" or s[:2] in ("1.", "2.", "3."):
+        return False
+    return bool(META_RE.search(s))
+
+
+def strip_preamble(text: str) -> str:
+    """Drop leading lines/sentences that talk about the transcript instead of the topic."""
+    lines = text.split("\n")
+    while lines:
+        if not lines[0].strip():
+            lines.pop(0)
+            continue
+        kept = re.split(r"(?<=[.!?:])\s+", lines[0])
+        while kept and _is_meta(kept[0]):
+            kept.pop(0)
+        if not kept:
+            lines.pop(0)
+            continue
+        lines[0] = " ".join(kept)
+        break
+    return "\n".join(lines).lstrip()
+
+
 def parse_chapter(text: str) -> tuple[str, str]:
     """Pull TITLE / SUMMARY out of a chapter model response, with fallbacks."""
     title, summary = "", ""
@@ -187,14 +232,17 @@ def parse_chapter(text: str) -> tuple[str, str]:
             summary = line.split(":", 1)[1].strip()
     if not summary:
         summary = text.strip()
+    cleaned = SECTION_LEAD_RE.sub("", strip_preamble(summary)).strip()
+    if cleaned:  # keep the original rather than emptying a one-sentence summary
+        summary = cleaned[0].upper() + cleaned[1:]
+    title = SECTION_LEAD_RE.sub("", title).strip()
     if not title:
         title = (summary[:50] + "…") if len(summary) > 50 else summary
     return title, summary
 
 
-def summarize_stream(transcript: str, model: str):
-    """Yield summary text chunks from Ollama as they arrive."""
-    prompt = SUMMARY_PROMPT.format(transcript=transcript[:24000])
+def _ollama_stream(prompt: str, model: str):
+    """Yield raw response chunks from Ollama as they arrive."""
     resp = requests.post(
         f"{OLLAMA_HOST}/api/generate",
         json={"model": model, "prompt": prompt, "stream": True},
@@ -210,6 +258,28 @@ def summarize_stream(transcript: str, model: str):
             yield obj["response"]
         if obj.get("done"):
             break
+
+
+def summarize_stream(transcript: str, model: str):
+    """Stream the summary, holding the opening back long enough to strip any preamble."""
+    prompt = SUMMARY_PROMPT.format(transcript=transcript[:24000])
+    buf, cleaned = "", False
+    for chunk in _ollama_stream(prompt, model):
+        if cleaned:
+            yield chunk
+            continue
+        buf += chunk
+        # Wait for a complete first line (or a sentence-sized buffer) before deciding.
+        if "\n" not in buf and len(buf) < 400:
+            continue
+        cleaned = True
+        opening = strip_preamble(buf)
+        if opening:
+            yield opening
+    if not cleaned:
+        opening = strip_preamble(buf)
+        if opening:
+            yield opening
 
 
 # --- Routes ----------------------------------------------------------------
