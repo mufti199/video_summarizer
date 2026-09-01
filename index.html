@@ -65,6 +65,15 @@
   button:active { transform: translateY(1px); }
   button:disabled { opacity: .5; cursor: not-allowed; }
   .hint { color: var(--muted); font-size: 12.5px; margin-top: 12px; }
+  .hintrow { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+  .notify {
+    display: inline-flex; align-items: center; gap: 7px; margin-top: 12px;
+    color: var(--muted); font-size: 12.5px; cursor: pointer; user-select: none;
+  }
+  .notify input { accent-color: var(--accent-2); width: 14px; height: 14px; cursor: pointer; }
+  .notify.off { opacity: .55; cursor: not-allowed; }
+  .notify.off input { cursor: not-allowed; }
+  .notify-state { color: var(--accent); }
 
   /* progress */
   #progress { margin-top: 22px; display: none; }
@@ -138,7 +147,14 @@
         <select id="model" title="Local Ollama model"></select>
         <button id="go">Summarize</button>
       </div>
-      <div class="hint" id="hint">Loading local models…</div>
+      <div class="hintrow">
+        <div class="hint" id="hint">Loading local models…</div>
+        <label class="notify" id="notifylabel" title="Uses your browser's notifications. Only fires while this tab is in the background.">
+          <input type="checkbox" id="notify" />
+          <span>Notify me when done</span>
+          <span class="notify-state" id="notifystate"></span>
+        </label>
+      </div>
 
       <div id="progress">
         <div class="steps">
@@ -178,6 +194,98 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let state = { title: "Summary", summary: "", transcript: "", chapters: [] };
+
+/* --- Desktop notifications -------------------------------------------------
+   Permission can only be requested from a user gesture, so we ask when the
+   checkbox is ticked, not on page load. Needs a secure origin: localhost and
+   127.0.0.1 count, a plain-http LAN address does not. */
+const NOTIFY_OK = "Notification" in window;
+const notifyBox = $("notify");
+
+function paintNotify(note) {
+  $("notifystate").textContent = note || "";
+  $("notifylabel").classList.toggle("off", notifyBox.disabled);
+}
+
+function initNotify() {
+  if (!NOTIFY_OK) {
+    notifyBox.disabled = true;
+    paintNotify("(not available on this origin)");
+    return;
+  }
+  if (Notification.permission === "denied") {
+    notifyBox.disabled = true;
+    paintNotify("(blocked in browser settings)");
+    return;
+  }
+  notifyBox.checked =
+    localStorage.getItem("ytsum.notify") === "1" && Notification.permission === "granted";
+  paintNotify();
+}
+
+notifyBox.addEventListener("change", async () => {
+  if (!notifyBox.checked) {
+    localStorage.setItem("ytsum.notify", "0");
+    paintNotify();
+    return;
+  }
+  let perm = Notification.permission;
+  if (perm === "default") perm = await Notification.requestPermission();
+  if (perm === "granted") {
+    localStorage.setItem("ytsum.notify", "1");
+    paintNotify();
+  } else {
+    notifyBox.checked = false;
+    localStorage.setItem("ytsum.notify", "0");
+    notifyBox.disabled = perm === "denied";
+    paintNotify(perm === "denied" ? "(blocked in browser settings)" : "(permission not granted)");
+  }
+});
+
+const APP_NAME = "Audio Summarizer";
+let appIcon = null;  // built once, cached
+
+/* The header logo is CSS-drawn, so redraw the same mark on a canvas to get a
+   real PNG for the notification. Returns "" if the canvas is unavailable. */
+function iconDataUrl() {
+  if (appIcon !== null) return appIcon;
+  appIcon = "";
+  try {
+    const size = 192;
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    const g = c.getContext("2d");
+    g.fillStyle = "#ff4d4d";
+    if (g.roundRect) {
+      g.beginPath();
+      g.roundRect(0, 0, size, size, size * 0.22);
+      g.fill();
+    } else {
+      g.fillRect(0, 0, size, size);
+    }
+    g.fillStyle = "#ffffff";
+    g.beginPath();
+    g.moveTo(size * 0.38, size * 0.30);
+    g.lineTo(size * 0.72, size * 0.50);
+    g.lineTo(size * 0.38, size * 0.70);
+    g.closePath();
+    g.fill();
+    appIcon = c.toDataURL("image/png");
+  } catch {}
+  return appIcon;
+}
+
+function notify(headline, body) {
+  if (!notifyBox.checked || !NOTIFY_OK || Notification.permission !== "granted") return;
+  if (!document.hidden && document.hasFocus()) return;  // they are already looking at it
+  try {
+    const opts = { body, tag: "ytsum" };
+    const icon = iconDataUrl();
+    if (icon) { opts.icon = icon; opts.badge = icon; }
+    const n = new Notification(`${APP_NAME}: ${headline}`, opts);
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch {}
+}
 
 async function loadModels() {
   try {
@@ -274,6 +382,7 @@ function run() {
     $("progress").style.display = "none";
     $("go").disabled = false;
     es.close();
+    notify("Summary ready", state.title);
   });
   es.addEventListener("error", (e) => {
     let msg = "Connection lost or the server stopped.";
@@ -282,6 +391,7 @@ function run() {
     $("progress").style.display = "none";
     $("go").disabled = false;
     es.close();
+    notify("Summarization failed", msg);
   });
 }
 
@@ -360,6 +470,7 @@ $("pdf").onclick = () => {
 $("go").onclick = run;
 $("url").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
 $("pipeinfo").textContent = "";
+initNotify();
 loadModels();
 </script>
 </body>
