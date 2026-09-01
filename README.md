@@ -3,7 +3,7 @@
 A small local web app: paste a YouTube link, and it downloads the audio and transcribes it
 with **Whisper**. From there you can **summarize** it or **chat about it** with a **local
 open-weight model via Ollama**, with the transcript held as context. Everything runs on
-your machine. Summaries export to **PDF** or **.txt**.
+your machine. Summaries copy out as **Markdown** or export to **PDF**.
 
 For longer videos (over 6 minutes by default) the summary also includes a **timestamped
 chapter breakdown** — each ~5-minute section gets its own title and short summary,
@@ -40,7 +40,8 @@ Then open **http://localhost:5000** in your browser.
 Paste a YouTube URL and click **Transcribe**. Once the transcript is ready the view opens
 into a workspace: controls on the left, chat in the middle, summary and chapters on the
 right. Click **Summarize** when you want the summary, or just start asking questions.
-Use **Save PDF**, **Save .txt**, or **Copy** to share the result.
+**Copy Markdown** puts the summary and chapters on the clipboard as Markdown; **Save PDF**
+writes them to a file.
 
 Tick **Notify me when done** to get a browser notification when a transcript or summary
 finishes while the tab is in the background.

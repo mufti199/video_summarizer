@@ -34,7 +34,10 @@
     max-width: 780px; margin: 0 auto; padding: 48px 20px 80px;
     transition: max-width .5s cubic-bezier(.4, 0, .2, 1);
   }
-  .wrap.wide { max-width: 1360px; }
+  /* The workspace earns the whole screen; the intro line is dead weight by then. */
+  .wrap.wide { max-width: min(1720px, 95vw); padding: 26px 20px 34px; }
+  .wrap.wide header { margin-bottom: 18px; }
+  .wrap.wide .sub { display: none; }
   header { text-align: center; margin-bottom: 32px; }
   .logo {
     display: inline-flex; align-items: center; gap: 10px;
@@ -111,15 +114,15 @@
      until there is a summary, so it can animate open instead of popping in. */
   #workspace {
     display: none; opacity: 0; transform: translateY(10px);
-    grid-template-columns: 268px minmax(0, 1fr) 0px;
-    gap: 22px; align-items: start;
+    grid-template-columns: 300px minmax(0, 1fr) 0px;
+    gap: 24px; align-items: start;
   }
   #workspace.in {
     opacity: 1; transform: none;
     transition: opacity .45s ease, transform .45s cubic-bezier(.4, 0, .2, 1),
                 grid-template-columns .45s cubic-bezier(.4, 0, .2, 1);
   }
-  #workspace.has-summary { grid-template-columns: 268px minmax(0, 1fr) 430px; }
+  #workspace.has-summary { grid-template-columns: 300px minmax(0, 1fr) 520px; }
 
   .ws-side { display: flex; flex-direction: column; gap: 12px; }
   .panel {
@@ -138,17 +141,23 @@
   #summarize { width: 100%; }
   #newvid { width: 100%; margin-top: 12px; }
 
-  .ws-chat { display: flex; flex-direction: column; height: min(72vh, 700px); }
+  .ws-chat { display: flex; flex-direction: column; height: min(78vh, 860px); }
   .ws-out { overflow: hidden; opacity: 0; transition: opacity .4s ease .1s; }
   #workspace.has-summary .ws-out { opacity: 1; }
-  .ws-out-inner { max-height: min(72vh, 700px); overflow-y: auto; padding-right: 4px; }
+  .ws-out-inner { max-height: min(78vh, 860px); overflow-y: auto; padding-right: 6px; }
   .ws-out-inner, #chatlog { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
+  /* Keep the chat column usable before the columns have to stack. */
+  @media (max-width: 1400px) {
+    #workspace { grid-template-columns: 260px minmax(0, 1fr) 0px; gap: 18px; }
+    #workspace.has-summary { grid-template-columns: 260px minmax(0, 1fr) 380px; }
+  }
   @media (max-width: 1080px) {
     #workspace, #workspace.has-summary { grid-template-columns: minmax(0, 1fr); }
     .ws-chat { height: auto; }
     #chatlog { max-height: 420px; }
     .ws-out-inner { max-height: none; }
+    .wrap.wide .sub { display: block; }
   }
 
   /* chat */
@@ -190,8 +199,23 @@
   .btn-ghost { background: var(--card-2); border: 1px solid var(--border); color: var(--text); }
   .summary {
     background: var(--card-2); border: 1px solid var(--border); border-radius: 12px;
-    padding: 18px 20px; line-height: 1.6; font-size: 15px; white-space: pre-wrap;
-    word-wrap: break-word;
+    padding: 20px 22px; line-height: 1.62; font-size: 14.5px; word-wrap: break-word;
+  }
+  .summary > *:first-child { margin-top: 0; }
+  .summary > *:last-child { margin-bottom: 0; }
+  .summary p { margin: 0 0 12px; }
+  .summary h2, .summary h3, .summary h4, .summary h5 {
+    margin: 18px 0 8px; font-size: 14px; font-weight: 650; color: var(--text);
+  }
+  .summary h2 { font-size: 15.5px; }
+  .summary ul, .summary ol { margin: 0 0 12px; padding-left: 22px; }
+  .summary li { margin: 5px 0; }
+  .summary li::marker { color: var(--accent-2); }
+  .summary strong { color: #fff; font-weight: 650; }
+  .summary em { color: #f6ede2; }
+  .summary code {
+    background: #2f2820; border: 1px solid var(--border); border-radius: 5px;
+    padding: 1px 5px; font-size: 12.8px;
   }
   .chapters { margin-top: 20px; display: none; }
   .chapters h3 { font-size: 14px; margin: 0 0 12px; color: var(--text); }
@@ -271,8 +295,7 @@
 
           <div class="panel">
             <div class="side-actions">
-              <button class="btn-ghost" id="copy">Copy</button>
-              <button class="btn-ghost" id="txt">Save .txt</button>
+              <button class="btn-ghost" id="copy" title="Copy the summary and chapters as Markdown">Copy Markdown</button>
               <button class="btn-ghost" id="pdf">Save PDF</button>
             </div>
             <details>
@@ -566,7 +589,7 @@ function summarizeNow() {
   });
   es.addEventListener("summary_chunk", (e) => {
     state.summary += JSON.parse(e.data).text;
-    $("summary").textContent = state.summary;
+    $("summary").innerHTML = renderMarkdown(state.summary);
   });
   es.addEventListener("chapters_start", () => { $("chapters").style.display = "block"; });
   es.addEventListener("chapter", (e) => {
@@ -694,28 +717,83 @@ function showError(msg) {
   el.style.display = "block";
 }
 
+/* --- Markdown ---------------------------------------------------------------
+   The models answer in light Markdown, so render the common subset rather than
+   dumping the raw asterisks on screen. Everything is escaped before any tag is
+   added, so model output can never inject HTML. */
+
+function renderMarkdown(md) {
+  const inline = (s) => escapeHtml(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+
+  const out = [];
+  let list = null;
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  const openList = (kind) => {
+    if (list !== kind) { closeList(); out.push(`<${kind}>`); list = kind; }
+  };
+
+  for (const raw of md.split("\n")) {
+    const line = raw.trim();
+    if (!line) { closeList(); continue; }
+
+    const head = line.match(/^(#{1,5})\s+(.*)$/);
+    if (head) {
+      closeList();
+      const level = Math.min(head[1].length + 1, 5);
+      out.push(`<h${level}>${inline(head[2])}</h${level}>`);
+      continue;
+    }
+    const bullet = line.match(/^[-*•]\s+(.*)$/);
+    if (bullet) { openList("ul"); out.push(`<li>${inline(bullet[1])}</li>`); continue; }
+
+    const numbered = line.match(/^\d+[.)]\s+(.*)$/);
+    if (numbered) { openList("ol"); out.push(`<li>${inline(numbered[1])}</li>`); continue; }
+
+    closeList();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList();
+  return out.join("");
+}
+
+function plainText(md) {
+  return md
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1$2")
+    .replace(/`([^`]+)`/g, "$1");
+}
+
+function summaryMarkdown() {
+  let md = `# ${state.title}\n\n${state.summary.trim()}\n`;
+  if (state.chapters.length) {
+    md += "\n## Chapters\n\n" + state.chapters
+      .map(c => `### ${c.start}–${c.end} ${c.title}\n\n${c.summary}\n`)
+      .join("\n");
+  }
+  return md;
+}
+
 function fileName(ext) {
   const safe = state.title.replace(/[^\w\- ]+/g, "").trim().slice(0, 60) || "summary";
   return `${safe}.${ext}`;
 }
 
-function chaptersText() {
-  if (!state.chapters.length) return "";
-  const lines = state.chapters.map(c => `[${c.start}–${c.end}] ${c.title}\n    ${c.summary}`);
-  return `\n\nCHAPTERS\n\n${lines.join("\n\n")}`;
-}
-
-$("txt").onclick = () => {
-  const body = `${state.title}\n${"=".repeat(state.title.length)}\n\nSUMMARY\n\n${state.summary}${chaptersText()}\n\n\nFULL TRANSCRIPT\n\n${state.transcript}\n`;
-  const blob = new Blob([body], { type: "text/plain" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = fileName("txt"); a.click();
-};
-
 $("copy").onclick = async () => {
-  await navigator.clipboard.writeText(`${state.title}\n\n${state.summary}`);
-  $("copy").textContent = "Copied!";
-  setTimeout(() => ($("copy").textContent = "Copy"), 1500);
+  const flash = (msg) => {
+    $("copy").textContent = msg;
+    setTimeout(() => ($("copy").textContent = "Copy Markdown"), 1600);
+  };
+  if (!state.summary.trim()) { flash("Nothing to copy"); return; }
+  try {
+    await navigator.clipboard.writeText(summaryMarkdown());
+    flash("Copied!");
+  } catch {
+    flash("Copy blocked");  // clipboard needs a secure origin and permission
+  }
 };
 
 $("pdf").onclick = () => {
@@ -734,7 +812,7 @@ $("pdf").onclick = () => {
   doc.setFont("helvetica", "bold"); doc.setFontSize(12);
   doc.text("Summary", margin, y); y += 18;
   doc.setFont("helvetica", "normal"); doc.setFontSize(11);
-  doc.splitTextToSize(state.summary, width).forEach(line => {
+  doc.splitTextToSize(plainText(state.summary), width).forEach(line => {
     if (y > 800) { doc.addPage(); y = margin; }
     doc.text(line, margin, y); y += 15;
   });
@@ -749,7 +827,7 @@ $("pdf").onclick = () => {
       doc.setFont("helvetica", "bold"); doc.setFontSize(10.5);
       doc.text(`${c.start}-${c.end}  ${c.title}`, margin, y); y += 14;
       doc.setFont("helvetica", "normal"); doc.setFontSize(10.5);
-      doc.splitTextToSize(c.summary, width - 12).forEach(line => {
+      doc.splitTextToSize(plainText(c.summary), width - 12).forEach(line => {
         if (y > 800) { doc.addPage(); y = margin; }
         doc.text(line, margin + 12, y); y += 13;
       });
