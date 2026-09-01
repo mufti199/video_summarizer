@@ -158,11 +158,16 @@ CONTENT:
 
 CHAPTER_PROMPT = """Below is one section of a longer piece of content. Reply with exactly \
 this format:
-TITLE: <a short 3-7 word title for this section>
-SUMMARY: <1-2 sentences on the subject matter itself>
+TITLE: <a short 3-7 word title naming what is covered>
+SUMMARY: <1-2 sentences giving the substance of it>
 
-Do not add anything else. Do not mention a transcript, video, audio, section or speaker in \
-either line. Be faithful to the content.
+Name the specific topics and say what was actually claimed about each, rather than \
+reporting that they came up. Write "Pod IPs are assigned by the CNI plugin, and IPAM is \
+pluggable" rather than "This section focuses on pod IPs, CNI plugins and IPAM".
+
+Do not add anything else. Do not open with "This section", "This part", "The speaker", \
+"Here", or any other phrase pointing at the material rather than its subject. Do not \
+mention a transcript, video, audio, section or speaker anywhere. Be faithful to the content.
 
 SECTION:
 \"\"\"
@@ -190,8 +195,24 @@ META_RE = re.compile(
     r"|^below is\b",
     re.I,
 )
+# Framing lead-ins on a chapter line: "In this section, …", "This part covers …",
+# "The speaker explains …". Stripping the lead leaves the topics themselves.
+_SUBJECT = r"(?:this|the)\s+(?:section|part|segment|chapter|clip|video|episode|passage)"
+_SPEAKER = r"(?:the\s+)?(?:speaker|narrator|author|presenter|host|instructor)"
+_VERB = (
+    r"(?:focus(?:es|ses)?\s+on|covers?|discusses|discuss|explains|explain|describes|"
+    r"describe|examines|explores|introduces|outlines|highlights|reviews|presents|"
+    r"looks?\s+at|deals?\s+with|talks?\s+about|goes?\s+over|walks?\s+through|"
+    r"touches?\s+on|centers?\s+on|centres?\s+on|is\s+about)"
+)
 SECTION_LEAD_RE = re.compile(
-    r"^in this (section|part|segment|video|chapter|clip)[,:]?\s*", re.I
+    # A section subject only counts as framing if a comma or a framing verb follows it,
+    # so a real sentence like "This part was recorded later" survives intact.
+    rf"^(?:in\s+|during\s+)?(?:"
+    rf"{_SUBJECT}(?:\s*[,:]\s*(?:{_SPEAKER}\s+{_VERB}\s+)?|\s+(?:{_VERB})\s+)"
+    rf"|{_SPEAKER}\s+{_VERB}\s+"
+    rf")(?:that\s+|how\s+|the\s+way\s+)?",
+    re.I,
 )
 
 
@@ -221,6 +242,14 @@ def strip_preamble(text: str) -> str:
     return "\n".join(lines).lstrip()
 
 
+def _recap(cleaned: str, original: str) -> str:
+    """Re-capitalise only when a lead-in was actually removed, so that a line
+    starting with something like "npm caching" keeps its own casing."""
+    if cleaned and cleaned != original:
+        return cleaned[0].upper() + cleaned[1:]
+    return cleaned
+
+
 def parse_chapter(text: str) -> tuple[str, str]:
     """Pull TITLE / SUMMARY out of a chapter model response, with fallbacks."""
     title, summary = "", ""
@@ -234,8 +263,8 @@ def parse_chapter(text: str) -> tuple[str, str]:
         summary = text.strip()
     cleaned = SECTION_LEAD_RE.sub("", strip_preamble(summary)).strip()
     if cleaned:  # keep the original rather than emptying a one-sentence summary
-        summary = cleaned[0].upper() + cleaned[1:]
-    title = SECTION_LEAD_RE.sub("", title).strip()
+        summary = _recap(cleaned, summary)
+    title = _recap(SECTION_LEAD_RE.sub("", title).strip(), title)
     if not title:
         title = (summary[:50] + "…") if len(summary) > 50 else summary
     return title, summary
@@ -287,6 +316,11 @@ def summarize_stream(transcript: str, model: str):
 @app.route("/")
 def index():
     return send_from_directory(HERE, "index.html")
+
+
+@app.route("/assets/<path:filename>")
+def assets(filename):
+    return send_from_directory(HERE / "assets", filename)
 
 
 @app.route("/models")
