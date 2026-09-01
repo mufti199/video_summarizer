@@ -1,5 +1,5 @@
 """
-YouTube Audio Summarizer — local Flask backend.
+AV Digest — local Flask backend.
 
 Pipeline:
   1. Download audio from a YouTube URL with yt-dlp.
@@ -547,5 +547,5 @@ def chat():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"\n  YouTube Summarizer running at  http://localhost:{port}\n")
+    print(f"\n  AV Digest running at  http://localhost:{port}\n")
     app.run(host="127.0.0.1", port=port, threaded=True, debug=False)

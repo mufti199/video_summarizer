@@ -3,30 +3,38 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>YouTube Audio Summarizer</title>
+<title>AV Digest</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root {
-    --bg: #0f1115;
-    --card: #181b22;
-    --card-2: #1f232c;
-    --border: #2a2f3a;
-    --text: #e7ebf0;
-    --muted: #9aa4b2;
-    --accent: #ff4d4d;
-    --accent-2: #6c8cff;
-    --ok: #47c974;
+    /* Palette sampled from assets/app thumbnail.png: the icon runs amber #f9b00b
+       at the top through #f07b11 to #e84d1d at the bottom. Neutrals are warmed
+       to sit with it rather than fight it. */
+    --bg: #12100d;
+    --card: #1c1815;
+    --card-2: #24201b;
+    --border: #342d26;
+    --text: #f1ece6;
+    --muted: #a89e93;
+    --accent: #ee5b16;      /* solid actions */
+    --accent-2: #f9b00b;    /* focus, links, timestamps */
+    --accent-grad: linear-gradient(180deg, #f2861a 0%, #e8551b 100%);
+    --ok: #4fc98a;
     --radius: 14px;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: radial-gradient(1200px 600px at 50% -10%, #1b2030 0%, var(--bg) 60%);
+    background: radial-gradient(1200px 600px at 50% -10%, #2b1c10 0%, var(--bg) 60%);
     color: var(--text);
     min-height: 100vh;
   }
-  .wrap { max-width: 780px; margin: 0 auto; padding: 48px 20px 80px; }
+  .wrap {
+    max-width: 780px; margin: 0 auto; padding: 48px 20px 80px;
+    transition: max-width .5s cubic-bezier(.4, 0, .2, 1);
+  }
+  .wrap.wide { max-width: 1360px; }
   header { text-align: center; margin-bottom: 32px; }
   .logo {
     display: inline-flex; align-items: center; gap: 10px;
@@ -54,7 +62,7 @@
   input[type="text"]:focus, select:focus { border-color: var(--accent-2); }
   select { flex: 0 0 auto; min-width: 150px; }
   button {
-    background: var(--accent); color: #fff; border: none; border-radius: 10px;
+    background: var(--accent-grad); color: #fff; border: none; border-radius: 10px;
     padding: 13px 22px; font-size: 15px; font-weight: 600; cursor: pointer;
     transition: transform .06s, opacity .15s;
   }
@@ -80,8 +88,8 @@
     padding: 8px 6px; border: 1px solid var(--border); border-radius: 10px;
     background: var(--card-2);
   }
-  .step.active { color: #fff; border-color: var(--accent-2); background: #232a3d; }
-  .step.done { color: var(--ok); border-color: #244a34; }
+  .step.active { color: #fff; border-color: var(--accent-2); background: #33261a; }
+  .step.done { color: var(--ok); border-color: #244a37; }
   .statusline {
     display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px;
   }
@@ -99,41 +107,72 @@
   }
   #setup.collapsed { max-height: 0; opacity: 0; pointer-events: none; }
 
-  /* workspace */
-  #workspace { display: none; opacity: 0; transform: translateY(10px); }
+  /* workspace: controls | chat | output. The third column is a real 0px track
+     until there is a summary, so it can animate open instead of popping in. */
+  #workspace {
+    display: none; opacity: 0; transform: translateY(10px);
+    grid-template-columns: 268px minmax(0, 1fr) 0px;
+    gap: 22px; align-items: start;
+  }
   #workspace.in {
     opacity: 1; transform: none;
-    transition: opacity .45s ease, transform .45s cubic-bezier(.4, 0, .2, 1);
+    transition: opacity .45s ease, transform .45s cubic-bezier(.4, 0, .2, 1),
+                grid-template-columns .45s cubic-bezier(.4, 0, .2, 1);
   }
-  .ws-head {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 12px; flex-wrap: wrap; margin-bottom: 16px;
-  }
-  .ws-meta { color: var(--muted); font-size: 12.5px; margin-top: 5px; }
-  .ws-meta select {
-    padding: 4px 8px; font-size: 12px; border-radius: 8px; min-width: 0;
-    margin-left: 4px;
-  }
-  #summarybar {
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    padding: 14px 16px; margin-bottom: 18px; border-radius: 12px;
+  #workspace.has-summary { grid-template-columns: 268px minmax(0, 1fr) 430px; }
+
+  .ws-side { display: flex; flex-direction: column; gap: 12px; }
+  .panel {
     background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px;
   }
-  #summarybar .grow { flex: 1 1 auto; color: var(--muted); font-size: 13px; }
+  .side-title { font-size: 15px; font-weight: 650; line-height: 1.35; }
+  .side-meta { color: var(--muted); font-size: 12px; margin-top: 7px; }
+  .side-meta select {
+    padding: 4px 8px; font-size: 12px; border-radius: 8px; min-width: 0;
+    margin-top: 8px; width: 100%;
+  }
+  .side-status { color: var(--muted); font-size: 12.5px; margin-top: 10px; line-height: 1.5; }
+  .side-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .side-actions button { padding: 8px 12px; font-size: 12.5px; flex: 1 1 auto; }
+  #summarize { width: 100%; }
+  #newvid { width: 100%; margin-top: 12px; }
+
+  .ws-chat { display: flex; flex-direction: column; height: min(72vh, 700px); }
+  .ws-out { overflow: hidden; opacity: 0; transition: opacity .4s ease .1s; }
+  #workspace.has-summary .ws-out { opacity: 1; }
+  .ws-out-inner { max-height: min(72vh, 700px); overflow-y: auto; padding-right: 4px; }
+  .ws-out-inner, #chatlog { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+  @media (max-width: 1080px) {
+    #workspace, #workspace.has-summary { grid-template-columns: minmax(0, 1fr); }
+    .ws-chat { height: auto; }
+    #chatlog { max-height: 420px; }
+    .ws-out-inner { max-height: none; }
+  }
 
   /* chat */
-  .chat { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 18px; }
-  .chat h3 { font-size: 14px; margin: 0 0 12px; }
-  #chatlog { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
-  #chatlog:empty { display: none; }
+  .ws-chat h3 { font-size: 14px; margin: 0 0 12px; }
+  #chatlog {
+    flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px;
+    margin-bottom: 12px; overflow-y: auto;
+  }
+  /* Sit the conversation next to the input. An auto margin on the first message
+     collapses to 0 once the log overflows, so nothing gets scrolled out of reach. */
+  #chatlog > .msg:first-child { margin-top: auto; }
+  #chatlog:empty::before {
+    content: "Ask anything about this video. The whole transcript is loaded as context.";
+    margin: auto; padding: 0 20px; max-width: 300px; text-align: center;
+    color: var(--muted); font-size: 13.5px; line-height: 1.6;
+  }
   .msg {
     max-width: 86%; padding: 11px 14px; border-radius: 13px; font-size: 14px;
     line-height: 1.55; white-space: pre-wrap; word-wrap: break-word;
     animation: rise .28s cubic-bezier(.4, 0, .2, 1) both;
   }
-  .msg.me { align-self: flex-end; background: #2c3550; border: 1px solid #3a4670; }
+  .msg.me { align-self: flex-end; background: #3b2a14; border: 1px solid #57411d; }
   .msg.bot { align-self: flex-start; background: var(--card-2); border: 1px solid var(--border); }
-  .msg.bad { align-self: flex-start; background: #2a1a1c; border: 1px solid #5a2b2f; color: #ffb4b4; }
+  .msg.bad { align-self: flex-start; background: #2e1418; border: 1px solid #6b2932; color: #ffb0bc; }
   .msg .dots::after { content: "…"; animation: blink 1.1s steps(3, end) infinite; }
   @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
   @keyframes blink { 50% { opacity: .35; } }
@@ -148,10 +187,6 @@
 
   /* result */
   #result { margin-top: 4px; display: none; }
-  .result-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-  .vid-title { font-size: 17px; font-weight: 650; }
-  .actions { display: flex; gap: 8px; }
-  .actions button { padding: 9px 14px; font-size: 13px; }
   .btn-ghost { background: var(--card-2); border: 1px solid var(--border); color: var(--text); }
   .summary {
     background: var(--card-2); border: 1px solid var(--border); border-radius: 12px;
@@ -178,8 +213,8 @@
     border: 1px solid var(--border); border-radius: 10px; padding: 14px;
   }
   .error {
-    margin-top: 18px; display: none; background: #2a1a1c; border: 1px solid #5a2b2f;
-    color: #ffb4b4; border-radius: 10px; padding: 14px 16px; font-size: 14px;
+    margin-top: 18px; display: none; background: #2e1418; border: 1px solid #6b2932;
+    color: #ffb0bc; border-radius: 10px; padding: 14px 16px; font-size: 14px;
   }
   footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 28px; }
   a { color: var(--accent-2); }
@@ -188,7 +223,7 @@
 <body>
   <div class="wrap">
     <header>
-      <div class="logo"><span class="play"></span> Audio Summarizer</div>
+      <div class="logo"><span class="play"></span> AV Digest</div>
       <div class="sub">Paste a YouTube link. It transcribes the audio locally with Whisper, then you can summarize it or ask your Ollama model about it. Nothing leaves your machine.</div>
     </header>
 
@@ -220,48 +255,54 @@
       <div class="error" id="error"></div>
 
       <div id="workspace">
-        <div class="ws-head">
-          <div>
-            <div class="vid-title" id="vidtitle">Transcript</div>
-            <div class="ws-meta">
+        <aside class="ws-side">
+          <div class="panel">
+            <div class="side-title" id="vidtitle">Transcript</div>
+            <div class="side-meta">
               <span id="vidmeta"></span>
               <span id="wsmodelslot"></span>
             </div>
           </div>
-          <div class="actions">
+
+          <div class="panel">
+            <button id="summarize">Summarize</button>
+            <div class="side-status" id="sumstatus">Transcript loaded. Summarize it, or just ask about it.</div>
+          </div>
+
+          <div class="panel">
+            <div class="side-actions">
+              <button class="btn-ghost" id="copy">Copy</button>
+              <button class="btn-ghost" id="txt">Save .txt</button>
+              <button class="btn-ghost" id="pdf">Save PDF</button>
+            </div>
+            <details>
+              <summary class="sm">Show full transcript</summary>
+              <div class="transcript" id="transcript"></div>
+            </details>
             <button class="btn-ghost" id="newvid">New video</button>
-            <button class="btn-ghost" id="copy">Copy</button>
-            <button class="btn-ghost" id="txt">Save .txt</button>
-            <button id="pdf">Save PDF</button>
           </div>
-        </div>
+        </aside>
 
-        <div id="summarybar">
-          <button id="summarize">Summarize</button>
-          <span class="grow" id="sumstatus">The transcript is loaded. Summarize it, or just ask about it below.</span>
-        </div>
-
-        <div id="result">
-          <div class="summary" id="summary"></div>
-          <div class="chapters" id="chapters">
-            <h3>Chapters</h3>
-            <div id="chapterlist"></div>
-          </div>
-        </div>
-
-        <details>
-          <summary class="sm">Show full transcript</summary>
-          <div class="transcript" id="transcript"></div>
-        </details>
-
-        <div class="chat">
+        <main class="ws-chat">
           <h3>Ask about this video</h3>
           <div id="chatlog"></div>
           <div class="chatbar">
             <textarea id="chatinput" rows="1" placeholder="What did they say about pricing?"></textarea>
             <button id="send">Send</button>
           </div>
-        </div>
+        </main>
+
+        <section class="ws-out">
+          <div class="ws-out-inner">
+            <div id="result">
+              <div class="summary" id="summary"></div>
+              <div class="chapters" id="chapters">
+                <h3>Chapters</h3>
+                <div id="chapterlist"></div>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -320,7 +361,7 @@ notifyBox.addEventListener("change", async () => {
   }
 });
 
-const APP_NAME = "Audio Summarizer";
+const APP_NAME = "AV Digest";
 const APP_IMG = "/assets/app%20thumbnail.png";
 // Where the icon sits inside that 1408x768 render, measured off the file.
 const ICON_BOX = { x: 502, y: 182, size: 404 };
@@ -408,7 +449,8 @@ function reset() {
   $("chatlog").innerHTML = "";
   $("summarize").textContent = "Summarize";
   $("summarize").disabled = false;
-  $("sumstatus").textContent = "The transcript is loaded. Summarize it, or just ask about it below.";
+  $("sumstatus").textContent = "Transcript loaded. Summarize it, or just ask about it.";
+  $("workspace").classList.remove("has-summary");
   state = { sid: "", title: "Transcript", summary: "", transcript: "", chapters: [], chat: [] };
 }
 
@@ -466,8 +508,9 @@ function openWorkspace() {
   $("setup").classList.add("collapsed");
   // The model only matters from here on, so the picker moves in with the work.
   $("wsmodelslot").appendChild($("model"));
+  document.querySelector(".wrap").classList.add("wide");
   const ws = $("workspace");
-  ws.style.display = "block";
+  ws.style.display = "grid";
   requestAnimationFrame(() => {
     ws.classList.add("in");
     ws.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -477,9 +520,10 @@ function openWorkspace() {
 
 function closeWorkspace() {
   const ws = $("workspace");
-  ws.classList.remove("in");
+  ws.classList.remove("in", "has-summary");
   ws.style.display = "none";
   $("modelslot").appendChild($("model"));
+  document.querySelector(".wrap").classList.remove("wide");
   $("setup").classList.remove("collapsed");
 }
 
@@ -501,6 +545,7 @@ function summarizeNow() {
   $("chapterlist").innerHTML = "";
   $("chapters").style.display = "none";
   $("result").style.display = "block";
+  $("workspace").classList.add("has-summary");  // opens the output column
   $("summarize").disabled = true;
   $("sumstatus").innerHTML = `<span class="spinner" style="display:inline-block;vertical-align:-3px"></span> Starting…`;
 

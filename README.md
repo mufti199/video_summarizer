@@ -1,10 +1,11 @@
-# YouTube Audio Summarizer
+# AV Digest
 
-A small local web app: paste a YouTube link, and it downloads the audio, transcribes it
-with **Whisper**, and summarizes it with a **local open-weight model via Ollama**.
-Everything runs on your machine. Summaries export to **PDF** or **.txt**.
+A small local web app: paste a YouTube link, and it downloads the audio and transcribes it
+with **Whisper**. From there you can **summarize** it or **chat about it** with a **local
+open-weight model via Ollama**, with the transcript held as context. Everything runs on
+your machine. Summaries export to **PDF** or **.txt**.
 
-For longer videos (over 6 minutes by default) it also produces a **timestamped
+For longer videos (over 6 minutes by default) the summary also includes a **timestamped
 chapter breakdown** — each ~5-minute section gets its own title and short summary,
 included in the on-screen view and both exports.
 
@@ -36,8 +37,13 @@ python app.py
 
 Then open **http://localhost:5000** in your browser.
 
-Paste a YouTube URL, pick your Ollama model, and click **Summarize**. When it's done,
-use **Save PDF**, **Save .txt**, or **Copy** to share the result.
+Paste a YouTube URL and click **Transcribe**. Once the transcript is ready the view opens
+into a workspace: controls on the left, chat in the middle, summary and chapters on the
+right. Click **Summarize** when you want the summary, or just start asking questions.
+Use **Save PDF**, **Save .txt**, or **Copy** to share the result.
+
+Tick **Notify me when done** to get a browser notification when a transcript or summary
+finishes while the tab is in the background.
 
 ## Configuration (optional environment variables)
 
@@ -50,6 +56,11 @@ use **Save PDF**, **Save .txt**, or **Copy** to share the result.
 | `PORT`            | `5000`                   | Web server port.                                 |
 | `CHAPTER_SECONDS` | `300`                    | Length of each timestamped chapter window (secs).|
 | `CHAPTER_MIN_DURATION` | `360`               | Only build chapters for videos longer than this. |
+| `OLLAMA_NUM_CTX`  | `8192`                   | Context window asked of Ollama. Its own default is 4096, which silently truncates long transcripts. |
+| `SUMMARY_CONTEXT_CHARS` | `18000`            | Transcript characters sent when summarizing.     |
+| `CHAT_CONTEXT_CHARS` | `12000`               | Transcript characters sent with each chat turn.  |
+| `CHAT_HISTORY_TURNS` | `8`                   | Earlier exchanges replayed into a chat turn.     |
+| `MAX_SESSIONS`    | `8`                      | Transcripts held in memory before the oldest is dropped. |
 
 Example:
 
@@ -60,9 +71,12 @@ WHISPER_MODEL=small python app.py
 ## Notes
 
 - Long videos take longer to transcribe. Start with a short clip to test.
-- The transcript is trimmed to ~24k characters before summarizing so it fits the model's
-  context. For very long videos, consider a larger-context model in Ollama.
-- Nothing is uploaded anywhere — download, transcription, and summarization are all local.
+- The transcript is trimmed before it goes to the model (see `SUMMARY_CONTEXT_CHARS` and
+  `CHAT_CONTEXT_CHARS`) so it fits inside `OLLAMA_NUM_CTX`. Raising the character limits
+  without raising `OLLAMA_NUM_CTX` means Ollama drops the overflow silently.
+- Transcripts are kept in memory only. Restarting the server means transcribing again.
+- Nothing is uploaded anywhere — download, transcription, summarizing, and chat are all
+  local. The one exception is the jsPDF library, loaded from a CDN for PDF export.
 
 ## Troubleshooting
 
