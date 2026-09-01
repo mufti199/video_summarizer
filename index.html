@@ -32,14 +32,11 @@
     display: inline-flex; align-items: center; gap: 10px;
     font-size: 26px; font-weight: 700; letter-spacing: -0.02em;
   }
+  /* assets/app thumbnail.png is a 1408x768 render with the 404px icon centred in
+     it, so scale to 348.5% and centre to show the icon alone. */
   .logo .play {
-    width: 34px; height: 24px; background: var(--accent); border-radius: 7px;
-    display: inline-flex; align-items: center; justify-content: center;
-  }
-  .logo .play::after {
-    content: ""; border-left: 10px solid #fff;
-    border-top: 6px solid transparent; border-bottom: 6px solid transparent;
-    margin-left: 2px;
+    width: 32px; height: 32px; border-radius: 22%;
+    background: url("/assets/app%20thumbnail.png") center / 348.5% auto no-repeat;
   }
   .sub { color: var(--muted); margin-top: 8px; font-size: 14px; }
 
@@ -243,46 +240,40 @@ notifyBox.addEventListener("change", async () => {
 });
 
 const APP_NAME = "Audio Summarizer";
-let appIcon = null;  // built once, cached
+const APP_IMG = "/assets/app%20thumbnail.png";
+// Where the icon sits inside that 1408x768 render, measured off the file.
+const ICON_BOX = { x: 502, y: 182, size: 404 };
+let appIcon = APP_IMG;  // upgraded to a square crop once the image loads
 
-/* The header logo is CSS-drawn, so redraw the same mark on a canvas to get a
-   real PNG for the notification. Returns "" if the canvas is unavailable. */
-function iconDataUrl() {
-  if (appIcon !== null) return appIcon;
-  appIcon = "";
-  try {
-    const size = 192;
-    const c = document.createElement("canvas");
-    c.width = c.height = size;
-    const g = c.getContext("2d");
-    g.fillStyle = "#ff4d4d";
-    if (g.roundRect) {
-      g.beginPath();
-      g.roundRect(0, 0, size, size, size * 0.22);
-      g.fill();
-    } else {
-      g.fillRect(0, 0, size, size);
-    }
-    g.fillStyle = "#ffffff";
-    g.beginPath();
-    g.moveTo(size * 0.38, size * 0.30);
-    g.lineTo(size * 0.72, size * 0.50);
-    g.lineTo(size * 0.38, size * 0.70);
-    g.closePath();
-    g.fill();
-    appIcon = c.toDataURL("image/png");
-  } catch {}
-  return appIcon;
+/* A notification icon wants a square, so crop the icon out of the wide render
+   on a canvas. Falls back to the raw file if anything here fails. */
+function buildIcon() {
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const size = 192;
+      const c = document.createElement("canvas");
+      c.width = c.height = size;
+      const g = c.getContext("2d");
+      if (g.roundRect) {  // clip the backdrop out of the squircle's corners
+        g.beginPath();
+        g.roundRect(0, 0, size, size, size * 0.22);
+        g.clip();
+      }
+      g.drawImage(img, ICON_BOX.x, ICON_BOX.y, ICON_BOX.size, ICON_BOX.size, 0, 0, size, size);
+      appIcon = c.toDataURL("image/png");
+    } catch {}
+  };
+  img.src = APP_IMG;
 }
 
 function notify(headline, body) {
   if (!notifyBox.checked || !NOTIFY_OK || Notification.permission !== "granted") return;
   if (!document.hidden && document.hasFocus()) return;  // they are already looking at it
   try {
-    const opts = { body, tag: "ytsum" };
-    const icon = iconDataUrl();
-    if (icon) { opts.icon = icon; opts.badge = icon; }
-    const n = new Notification(`${APP_NAME}: ${headline}`, opts);
+    const n = new Notification(`${APP_NAME}: ${headline}`, {
+      body, tag: "ytsum", icon: appIcon, badge: appIcon,
+    });
     n.onclick = () => { window.focus(); n.close(); };
   } catch {}
 }
@@ -471,6 +462,7 @@ $("go").onclick = run;
 $("url").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
 $("pipeinfo").textContent = "";
 initNotify();
+buildIcon();
 loadModels();
 </script>
 </body>
