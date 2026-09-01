@@ -4,7 +4,8 @@ YouTube Audio Summarizer — local Flask backend.
 Pipeline:
   1. Download audio from a YouTube URL with yt-dlp.
   2. Transcribe the audio with faster-whisper (runs locally).
-  3. Summarize the transcript with a local open-weight model via Ollama.
+  3. Hold the transcript in a session, then summarize or chat about it on demand
+     with a local open-weight model via Ollama.
 
 Nothing leaves your machine. Requires: ffmpeg + Ollama running locally.
 """
@@ -13,7 +14,8 @@ import json
 import os
 import re
 import tempfile
-import time
+import uuid
+from collections import OrderedDict
 from pathlib import Path
 
 import requests
@@ -30,8 +32,21 @@ WHISPER_COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8")  # int8 is fast on C
 CHAPTER_SECONDS = int(os.environ.get("CHAPTER_SECONDS", "300"))  # window size (5 min)
 CHAPTER_MIN_DURATION = int(os.environ.get("CHAPTER_MIN_DURATION", "360"))  # only chapter videos longer than this (6 min)
 
+# Ollama defaults to a 4096-token window, which silently truncates a long
+# transcript. Raise it, and keep what we send comfortably inside it.
+OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+SUMMARY_CONTEXT_CHARS = int(os.environ.get("SUMMARY_CONTEXT_CHARS", "18000"))
+CHAT_CONTEXT_CHARS = int(os.environ.get("CHAT_CONTEXT_CHARS", "12000"))
+CHAT_HISTORY_TURNS = int(os.environ.get("CHAT_HISTORY_TURNS", "8"))  # user+assistant messages kept
+
 app = Flask(__name__, static_folder=None)
 HERE = Path(__file__).parent
+
+# Transcripts live here between requests so the summarize and chat calls do not
+# have to re-send them. In-memory and single-process on purpose: this is a
+# local, single-user app, and a restart simply means transcribing again.
+SESSIONS: "OrderedDict[str, dict]" = OrderedDict()
+MAX_SESSIONS = int(os.environ.get("MAX_SESSIONS", "8"))
 
 # Lazily loaded so the server starts instantly and the model loads on first use.
 _whisper = None
@@ -176,11 +191,72 @@ SECTION:
 """
 
 
+CHAT_SYSTEM = """You are answering questions about the content below, which the user has \
+just transcribed.
+
+Answer from the content. If it does not cover something, say so plainly instead of \
+guessing, and say clearly when you are adding outside knowledge. Keep answers short \
+unless asked for detail. Do not preface answers with "Based on the transcript" or similar; \
+just answer.
+
+TITLE: {title}
+
+CONTENT:
+\"\"\"
+{transcript}
+\"\"\"
+"""
+
+
+def new_session(title: str, segments: list[dict], transcript: str) -> str:
+    """Store a transcript and return its session id, evicting the oldest if full."""
+    sid = uuid.uuid4().hex
+    SESSIONS[sid] = {
+        "title": title,
+        "segments": segments,
+        "transcript": transcript,
+        "messages": [],
+    }
+    while len(SESSIONS) > MAX_SESSIONS:
+        SESSIONS.popitem(last=False)
+    return sid
+
+
+def chat_stream(model: str, messages: list[dict]):
+    """Yield assistant content chunks from Ollama's chat endpoint."""
+    resp = requests.post(
+        f"{OLLAMA_HOST}/api/chat",
+        json={
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "options": {"num_ctx": OLLAMA_NUM_CTX},
+        },
+        stream=True,
+        timeout=600,
+    )
+    resp.raise_for_status()
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        obj = json.loads(line)
+        piece = (obj.get("message") or {}).get("content")
+        if piece:
+            yield piece
+        if obj.get("done"):
+            break
+
+
 def summarize_once(prompt: str, model: str) -> str:
     """Non-streaming Ollama call; returns the full response text."""
     resp = requests.post(
         f"{OLLAMA_HOST}/api/generate",
-        json={"model": model, "prompt": prompt, "stream": False},
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"num_ctx": OLLAMA_NUM_CTX},
+        },
         timeout=600,
     )
     resp.raise_for_status()
@@ -274,7 +350,12 @@ def _ollama_stream(prompt: str, model: str):
     """Yield raw response chunks from Ollama as they arrive."""
     resp = requests.post(
         f"{OLLAMA_HOST}/api/generate",
-        json={"model": model, "prompt": prompt, "stream": True},
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": True,
+            "options": {"num_ctx": OLLAMA_NUM_CTX},
+        },
         stream=True,
         timeout=600,
     )
@@ -291,7 +372,7 @@ def _ollama_stream(prompt: str, model: str):
 
 def summarize_stream(transcript: str, model: str):
     """Stream the summary, holding the opening back long enough to strip any preamble."""
-    prompt = SUMMARY_PROMPT.format(transcript=transcript[:24000])
+    prompt = SUMMARY_PROMPT.format(transcript=transcript[:SUMMARY_CONTEXT_CHARS])
     buf, cleaned = "", False
     for chunk in _ollama_stream(prompt, model):
         if cleaned:
@@ -335,14 +416,17 @@ def models():
         return {"models": [], "error": str(e)}, 200
 
 
-@app.route("/summarize")
-def summarize():
+SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
+@app.route("/transcribe")
+def transcribe_route():
+    """Download and transcribe only. Summarizing and chat happen afterwards."""
     url = request.args.get("url", "").strip()
-    model = request.args.get("model", "llama3.2").strip() or "llama3.2"
 
     if not is_youtube_url(url):
         return Response(sse("error", message="Please enter a valid YouTube URL."),
-                        mimetype="text/event-stream")
+                        mimetype="text/event-stream", headers=SSE_HEADERS)
 
     @stream_with_context
     def generate():
@@ -358,13 +442,44 @@ def summarize():
             if not segments:
                 yield sse("error", message="Could not transcribe any speech from this video.")
                 return
-            transcript = full_text(segments)
-            yield sse("transcript", text=transcript)
 
-            yield sse("status", stage="summarize",
-                      message=f"Summarizing with {model}…")
+            transcript = full_text(segments)
+            duration = segments[-1]["end"]
+            sid = new_session(title, segments, transcript)
+            yield sse("transcript", text=transcript)
+            yield sse("ready", sid=sid, title=title, duration=fmt_ts(duration),
+                      words=len(transcript.split()),
+                      chapters_available=duration >= CHAPTER_MIN_DURATION)
+        except Exception as e:  # noqa: BLE001
+            yield sse("error", message=f"{type(e).__name__}: {e}")
+        finally:
+            try:
+                for f in os.listdir(tmp):
+                    os.remove(os.path.join(tmp, f))
+                os.rmdir(tmp)
+            except OSError:
+                pass
+
+    return Response(generate(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
+@app.route("/summarize")
+def summarize():
+    """Summarize a transcript that /transcribe already put in a session."""
+    sid = request.args.get("sid", "").strip()
+    model = request.args.get("model", "llama3.2").strip() or "llama3.2"
+    sess = SESSIONS.get(sid)
+
+    if sess is None:
+        return Response(sse("error", message="That transcript is no longer loaded. Transcribe the video again."),
+                        mimetype="text/event-stream", headers=SSE_HEADERS)
+
+    @stream_with_context
+    def generate():
+        try:
+            yield sse("status", stage="summarize", message=f"Summarizing with {model}…")
             got_any = False
-            for chunk in summarize_stream(transcript, model):
+            for chunk in summarize_stream(sess["transcript"], model):
                 got_any = True
                 yield sse("summary_chunk", text=chunk)
             if not got_any:
@@ -372,8 +487,8 @@ def summarize():
                 return
 
             # Chapter breakdown for longer videos.
-            duration = segments[-1]["end"]
-            if duration >= CHAPTER_MIN_DURATION:
+            segments = sess["segments"]
+            if segments[-1]["end"] >= CHAPTER_MIN_DURATION:
                 chapters = make_chapters(segments, CHAPTER_SECONDS)
                 yield sse("chapters_start", count=len(chapters))
                 for i, ch in enumerate(chapters):
@@ -387,16 +502,47 @@ def summarize():
             yield sse("done", message="Complete.")
         except Exception as e:  # noqa: BLE001
             yield sse("error", message=f"{type(e).__name__}: {e}")
-        finally:
-            try:
-                for f in os.listdir(tmp):
-                    os.remove(os.path.join(tmp, f))
-                os.rmdir(tmp)
-            except OSError:
-                pass
 
-    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    return Response(generate(), mimetype="text/event-stream", headers=headers)
+    return Response(generate(), mimetype="text/event-stream", headers=SSE_HEADERS)
+
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    """Answer a question about the loaded transcript, streaming plain text back."""
+    body = request.get_json(silent=True) or {}
+    sid = (body.get("sid") or "").strip()
+    model = (body.get("model") or "llama3.2").strip() or "llama3.2"
+    message = (body.get("message") or "").strip()
+    sess = SESSIONS.get(sid)
+
+    if sess is None:
+        return {"error": "That transcript is no longer loaded. Transcribe the video again."}, 404
+    if not message:
+        return {"error": "Empty message."}, 400
+
+    system = CHAT_SYSTEM.format(
+        title=sess["title"], transcript=sess["transcript"][:CHAT_CONTEXT_CHARS]
+    )
+    history = sess["messages"][-CHAT_HISTORY_TURNS * 2:]
+    messages = ([{"role": "system", "content": system}] + history
+                + [{"role": "user", "content": message}])
+
+    @stream_with_context
+    def generate():
+        reply = ""
+        try:
+            for chunk in chat_stream(model, messages):
+                reply += chunk
+                yield chunk
+        except Exception as e:  # noqa: BLE001
+            yield f"\n\n[{type(e).__name__}: {e}]"
+            return
+        # Only remember exchanges that actually completed.
+        sess["messages"].append({"role": "user", "content": message})
+        sess["messages"].append({"role": "assistant", "content": reply})
+
+    return Response(generate(), mimetype="text/plain; charset=utf-8",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 if __name__ == "__main__":

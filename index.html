@@ -92,8 +92,62 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* setup collapses away once there is a transcript to work with */
+  #setup {
+    overflow: hidden; max-height: 400px; opacity: 1;
+    transition: max-height .5s cubic-bezier(.4, 0, .2, 1), opacity .28s ease;
+  }
+  #setup.collapsed { max-height: 0; opacity: 0; pointer-events: none; }
+
+  /* workspace */
+  #workspace { display: none; opacity: 0; transform: translateY(10px); }
+  #workspace.in {
+    opacity: 1; transform: none;
+    transition: opacity .45s ease, transform .45s cubic-bezier(.4, 0, .2, 1);
+  }
+  .ws-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 16px;
+  }
+  .ws-meta { color: var(--muted); font-size: 12.5px; margin-top: 5px; }
+  .ws-meta select {
+    padding: 4px 8px; font-size: 12px; border-radius: 8px; min-width: 0;
+    margin-left: 4px;
+  }
+  #summarybar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 16px; margin-bottom: 18px; border-radius: 12px;
+    background: var(--card-2); border: 1px solid var(--border);
+  }
+  #summarybar .grow { flex: 1 1 auto; color: var(--muted); font-size: 13px; }
+
+  /* chat */
+  .chat { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 18px; }
+  .chat h3 { font-size: 14px; margin: 0 0 12px; }
+  #chatlog { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+  #chatlog:empty { display: none; }
+  .msg {
+    max-width: 86%; padding: 11px 14px; border-radius: 13px; font-size: 14px;
+    line-height: 1.55; white-space: pre-wrap; word-wrap: break-word;
+    animation: rise .28s cubic-bezier(.4, 0, .2, 1) both;
+  }
+  .msg.me { align-self: flex-end; background: #2c3550; border: 1px solid #3a4670; }
+  .msg.bot { align-self: flex-start; background: var(--card-2); border: 1px solid var(--border); }
+  .msg.bad { align-self: flex-start; background: #2a1a1c; border: 1px solid #5a2b2f; color: #ffb4b4; }
+  .msg .dots::after { content: "…"; animation: blink 1.1s steps(3, end) infinite; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes blink { 50% { opacity: .35; } }
+  .chatbar { display: flex; gap: 8px; align-items: flex-end; }
+  #chatinput {
+    flex: 1 1 auto; resize: none; font-family: inherit; font-size: 14.5px;
+    background: var(--card-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; padding: 12px 14px; outline: none; max-height: 160px;
+    transition: border-color .15s;
+  }
+  #chatinput:focus { border-color: var(--accent-2); }
+
   /* result */
-  #result { margin-top: 22px; display: none; }
+  #result { margin-top: 4px; display: none; }
   .result-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
   .vid-title { font-size: 17px; font-weight: 650; }
   .actions { display: flex; gap: 8px; }
@@ -135,53 +189,79 @@
   <div class="wrap">
     <header>
       <div class="logo"><span class="play"></span> Audio Summarizer</div>
-      <div class="sub">Paste a YouTube link. It transcribes the audio locally with Whisper and summarizes it with your Ollama model. Nothing leaves your machine.</div>
+      <div class="sub">Paste a YouTube link. It transcribes the audio locally with Whisper, then you can summarize it or ask your Ollama model about it. Nothing leaves your machine.</div>
     </header>
 
     <div class="card">
-      <div class="row">
-        <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" />
-        <select id="model" title="Local Ollama model"></select>
-        <button id="go">Summarize</button>
-      </div>
-      <div class="hintrow">
-        <div class="hint" id="hint">Loading local models…</div>
-        <label class="notify" id="notifylabel" title="Uses your browser's notifications. Only fires while this tab is in the background.">
-          <input type="checkbox" id="notify" />
-          <span>Notify me when done</span>
-          <span class="notify-state" id="notifystate"></span>
-        </label>
+      <div id="setup">
+        <div class="row">
+          <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" />
+          <span id="modelslot"><select id="model" title="Local Ollama model"></select></span>
+          <button id="go">Transcribe</button>
+        </div>
+        <div class="hintrow">
+          <div class="hint" id="hint">Loading local models…</div>
+          <label class="notify" id="notifylabel" title="Uses your browser's notifications. Only fires while this tab is in the background.">
+            <input type="checkbox" id="notify" />
+            <span>Notify me when done</span>
+            <span class="notify-state" id="notifystate"></span>
+          </label>
+        </div>
       </div>
 
       <div id="progress">
         <div class="steps">
           <div class="step" data-step="download">1 · Download</div>
           <div class="step" data-step="transcribe">2 · Transcribe</div>
-          <div class="step" data-step="summarize">3 · Summarize</div>
         </div>
         <div class="statusline"><span class="spinner"></span><span id="statusmsg">Starting…</span></div>
       </div>
 
       <div class="error" id="error"></div>
 
-      <div id="result">
-        <div class="result-head">
-          <div class="vid-title" id="vidtitle">Summary</div>
+      <div id="workspace">
+        <div class="ws-head">
+          <div>
+            <div class="vid-title" id="vidtitle">Transcript</div>
+            <div class="ws-meta">
+              <span id="vidmeta"></span>
+              <span id="wsmodelslot"></span>
+            </div>
+          </div>
           <div class="actions">
+            <button class="btn-ghost" id="newvid">New video</button>
             <button class="btn-ghost" id="copy">Copy</button>
             <button class="btn-ghost" id="txt">Save .txt</button>
             <button id="pdf">Save PDF</button>
           </div>
         </div>
-        <div class="summary" id="summary"></div>
-        <div class="chapters" id="chapters">
-          <h3>Chapters</h3>
-          <div id="chapterlist"></div>
+
+        <div id="summarybar">
+          <button id="summarize">Summarize</button>
+          <span class="grow" id="sumstatus">The transcript is loaded. Summarize it, or just ask about it below.</span>
         </div>
+
+        <div id="result">
+          <div class="summary" id="summary"></div>
+          <div class="chapters" id="chapters">
+            <h3>Chapters</h3>
+            <div id="chapterlist"></div>
+          </div>
+        </div>
+
         <details>
           <summary class="sm">Show full transcript</summary>
           <div class="transcript" id="transcript"></div>
         </details>
+
+        <div class="chat">
+          <h3>Ask about this video</h3>
+          <div id="chatlog"></div>
+          <div class="chatbar">
+            <textarea id="chatinput" rows="1" placeholder="What did they say about pricing?"></textarea>
+            <button id="send">Send</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -190,7 +270,8 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let state = { title: "Summary", summary: "", transcript: "", chapters: [] };
+let state = { sid: "", title: "Transcript", summary: "", transcript: "", chapters: [], chat: [] };
+let runES = null, sumES = null;  // live SSE streams, closed on reset
 
 /* --- Desktop notifications -------------------------------------------------
    Permission can only be requested from a user gesture, so we ask when the
@@ -302,39 +383,47 @@ async function loadModels() {
 }
 
 function setStep(stage) {
-  const order = ["download", "transcribe", "summarize"];
-  // "chapters" runs after the overall summary — keep all three marked done.
-  const idx = stage === "chapters" ? order.length : order.indexOf(stage);
+  const order = ["download", "transcribe"];
+  const idx = stage === "ready" ? order.length : order.indexOf(stage);
   document.querySelectorAll(".step").forEach(el => {
-    const s = el.dataset.step;
-    const i = order.indexOf(s);
+    const i = order.indexOf(el.dataset.step);
     el.classList.remove("active", "done");
     if (i < idx) el.classList.add("done");
     else if (i === idx) el.classList.add("active");
   });
 }
 
+/* --- Phase 1: transcribe --------------------------------------------------- */
+
 function reset() {
+  // Close anything still streaming, or it will write into the next video's panel.
+  if (runES) { runES.close(); runES = null; }
+  if (sumES) { sumES.close(); sumES = null; }
   $("error").style.display = "none";
   $("result").style.display = "none";
   $("summary").textContent = "";
   $("transcript").textContent = "";
   $("chapters").style.display = "none";
   $("chapterlist").innerHTML = "";
-  state = { title: "Summary", summary: "", transcript: "", chapters: [] };
+  $("chatlog").innerHTML = "";
+  $("summarize").textContent = "Summarize";
+  $("summarize").disabled = false;
+  $("sumstatus").textContent = "The transcript is loaded. Summarize it, or just ask about it below.";
+  state = { sid: "", title: "Transcript", summary: "", transcript: "", chapters: [], chat: [] };
 }
 
 function run() {
   const url = $("url").value.trim();
-  const model = $("model").value;
   if (!url) { showError("Please paste a YouTube URL first."); return; }
   reset();
+  closeWorkspace();
   $("go").disabled = true;
   $("progress").style.display = "block";
   $("statusmsg").textContent = "Starting…";
   setStep("download");
 
-  const es = new EventSource(`/summarize?url=${encodeURIComponent(url)}&model=${encodeURIComponent(model)}`);
+  const es = new EventSource(`/transcribe?url=${encodeURIComponent(url)}`);
+  runES = es;
 
   es.addEventListener("status", (e) => {
     const d = JSON.parse(e.data);
@@ -349,14 +438,92 @@ function run() {
     state.transcript = JSON.parse(e.data).text;
     $("transcript").textContent = state.transcript;
   });
+  es.addEventListener("ready", (e) => {
+    const d = JSON.parse(e.data);
+    state.sid = d.sid;
+    setStep("ready");
+    $("vidmeta").textContent = `${d.duration} · ${d.words.toLocaleString()} words · `;
+    es.close();
+    runES = null;
+    openWorkspace();
+    notify("Transcript ready", state.title);
+  });
+  es.addEventListener("error", (e) => {
+    let msg = "Connection lost or the server stopped.";
+    try { if (e.data) msg = JSON.parse(e.data).message; } catch {}
+    showError(msg);
+    $("progress").style.display = "none";
+    $("go").disabled = false;
+    es.close();
+    notify("Transcription failed", msg);
+  });
+}
+
+/* --- Phase 2: the workspace ------------------------------------------------ */
+
+function openWorkspace() {
+  $("progress").style.display = "none";
+  $("setup").classList.add("collapsed");
+  // The model only matters from here on, so the picker moves in with the work.
+  $("wsmodelslot").appendChild($("model"));
+  const ws = $("workspace");
+  ws.style.display = "block";
+  requestAnimationFrame(() => {
+    ws.classList.add("in");
+    ws.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+  $("chatinput").focus();
+}
+
+function closeWorkspace() {
+  const ws = $("workspace");
+  ws.classList.remove("in");
+  ws.style.display = "none";
+  $("modelslot").appendChild($("model"));
+  $("setup").classList.remove("collapsed");
+}
+
+$("newvid").onclick = () => {
+  reset();
+  closeWorkspace();
+  $("go").disabled = false;
+  $("url").focus();
+  $("url").select();
+};
+
+/* --- Summarize on demand --------------------------------------------------- */
+
+function summarizeNow() {
+  if (!state.sid) return;
+  state.summary = "";
+  state.chapters = [];
+  $("summary").textContent = "";
+  $("chapterlist").innerHTML = "";
+  $("chapters").style.display = "none";
+  $("result").style.display = "block";
+  $("summarize").disabled = true;
+  $("sumstatus").innerHTML = `<span class="spinner" style="display:inline-block;vertical-align:-3px"></span> Starting…`;
+
+  const model = $("model").value;
+  const es = new EventSource(`/summarize?sid=${encodeURIComponent(state.sid)}&model=${encodeURIComponent(model)}`);
+  sumES = es;
+
+  const finish = () => {
+    $("summarize").disabled = false;
+    $("summarize").textContent = "Summarize again";
+    es.close();
+    sumES = null;
+  };
+
+  es.addEventListener("status", (e) => {
+    $("sumstatus").innerHTML = `<span class="spinner" style="display:inline-block;vertical-align:-3px"></span> ` +
+      escapeHtml(JSON.parse(e.data).message);
+  });
   es.addEventListener("summary_chunk", (e) => {
-    if ($("result").style.display !== "block") $("result").style.display = "block";
     state.summary += JSON.parse(e.data).text;
     $("summary").textContent = state.summary;
   });
-  es.addEventListener("chapters_start", () => {
-    $("chapters").style.display = "block";
-  });
+  es.addEventListener("chapters_start", () => { $("chapters").style.display = "block"; });
   es.addEventListener("chapter", (e) => {
     const c = JSON.parse(e.data);
     state.chapters.push(c);
@@ -370,21 +537,111 @@ function run() {
     $("chapterlist").appendChild(row);
   });
   es.addEventListener("done", () => {
-    $("progress").style.display = "none";
-    $("go").disabled = false;
-    es.close();
+    $("sumstatus").textContent = "Summary complete.";
+    finish();
     notify("Summary ready", state.title);
   });
   es.addEventListener("error", (e) => {
     let msg = "Connection lost or the server stopped.";
     try { if (e.data) msg = JSON.parse(e.data).message; } catch {}
-    showError(msg);
-    $("progress").style.display = "none";
-    $("go").disabled = false;
-    es.close();
-    notify("Summarization failed", msg);
+    $("sumstatus").textContent = msg;
+    finish();
   });
 }
+
+/* --- Chat ------------------------------------------------------------------ */
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function bubble(kind, text) {
+  const el = document.createElement("div");
+  el.className = `msg ${kind}`;
+  el.textContent = text;
+  $("chatlog").appendChild(el);
+  el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  return el;
+}
+
+/* Scrolling on every streamed token fights whatever the reader is doing, so
+   follow the answer only when it has grown past the bottom of the viewport. */
+let lastFollow = 0;
+function keepInView(el) {
+  const now = Date.now();
+  if (now - lastFollow < 250) return;
+  if (el.getBoundingClientRect().bottom > window.innerHeight - 8) {
+    lastFollow = now;
+    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+}
+
+let chatting = false;
+
+async function send() {
+  const input = $("chatinput");
+  const question = input.value.trim();
+  if (!question || chatting) return;
+  if (!state.sid) { bubble("bad", "Transcribe a video first."); return; }
+
+  chatting = true;
+  $("send").disabled = true;
+  input.value = "";
+  input.style.height = "auto";
+  bubble("me", question);
+  state.chat.push({ role: "you", text: question });
+
+  const out = bubble("bot", "");
+  out.innerHTML = '<span class="dots"></span>';
+  let answer = "";
+
+  try {
+    const r = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sid: state.sid, model: $("model").value, message: question }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      out.remove();
+      bubble("bad", j.error || `Chat failed (HTTP ${r.status}).`);
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      answer += dec.decode(value, { stream: true });
+      out.textContent = answer;
+      keepInView(out);
+    }
+    if (!answer.trim()) {
+      out.remove();
+      bubble("bad", "The model returned nothing. Is it still loaded in Ollama?");
+      return;
+    }
+    state.chat.push({ role: "model", text: answer });
+  } catch (err) {
+    out.remove();
+    bubble("bad", `Chat failed: ${err.message}`);
+  } finally {
+    chatting = false;
+    $("send").disabled = false;
+    input.focus();
+  }
+}
+
+$("summarize").onclick = summarizeNow;
+$("send").onclick = send;
+$("chatinput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+$("chatinput").addEventListener("input", (e) => {
+  e.target.style.height = "auto";
+  e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
+});
 
 function showError(msg) {
   const el = $("error");
